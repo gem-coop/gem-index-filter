@@ -1,4 +1,4 @@
-use facet::filter_versions_bytes;
+use facet::filter::filter_versions_streaming;
 use std::collections::HashSet;
 use std::env;
 use std::fs::File;
@@ -39,17 +39,15 @@ fn main() -> io::Result<()> {
         Box::new(File::open(versions_file)?)
     };
 
-    // Filter
-    eprintln!("Filtering versions file...");
-    let filtered = filter_versions_bytes(input, &allowlist)?;
-    eprintln!("Filtered result: {} bytes", filtered.len());
-
-    // Write output
+    // Stream and filter directly to output
+    eprintln!("Streaming and filtering versions file...");
     if let Some(output_path) = output_file {
-        std::fs::write(output_path, &filtered)?;
+        let mut output = File::create(output_path)?;
+        filter_versions_streaming(input, &mut output, &allowlist)?;
         eprintln!("Written to {}", output_path);
     } else {
-        io::Write::write_all(&mut io::stdout(), &filtered)?;
+        let mut output = io::stdout();
+        filter_versions_streaming(input, &mut output, &allowlist)?;
     }
 
     Ok(())
@@ -64,7 +62,7 @@ fn read_allowlist(path: &str) -> io::Result<HashSet<String>> {
     for line in reader.lines() {
         let line = line?;
         let gem_name = line.trim();
-        if !gem_name.is_empty() && !gem_name.starts_with('#') {
+        if !gem_name.is_empty() {
             allowlist.insert(gem_name.to_string());
         }
     }

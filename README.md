@@ -4,10 +4,10 @@ Fast filtering for RubyGems `versions` index files. Designed for memory-constrai
 
 ## Features
 
-- **Streaming parser**: Handles 20+ MB files with minimal memory footprint (~3MB for 10k gems)
-- **Deterministic output**: Preserves original gem order (by first occurrence)
-- **Last-occurrence semantics**: When a gem appears multiple times, uses the most recent data
-- **Fast filtering**: O(1) lookups using FxHashMap
+- **Streaming parser**: Handles 20+ MB files with minimal memory footprint
+- **Simple filtering**: If a gem is in the allowlist, all occurrences are included
+- **Order preservation**: Maintains exact original order from the input file
+- **Fast lookups**: O(1) allowlist checks using HashSet
 - **Tested**: Comprehensive test suite with real-world data
 
 ## Performance
@@ -74,17 +74,16 @@ When a gem appears multiple times, the last occurrence has the authoritative MD5
 ## How It Works
 
 1. **Parse**: Stream input line-by-line using BufReader
-2. **Track**: Store each allowlisted gem in a HashMap with:
-   - `first_line_number`: Original position (for deterministic ordering)
-   - `last_content`: Most recent version data
-3. **Output**: Sort by `first_line_number` and serialize
+2. **Filter**: For each line, check if gem name is in the allowlist
+3. **Output**: Include all matching lines in original order
 
 ### Why This Works
 
-The versions file is append-only. New releases or yanked versions are appended to the end. This means:
-- First occurrence determines display order
-- Last occurrence has the most up-to-date info
-- We can stream input without loading it all into memory
+The filtering is intentionally simple:
+- All occurrences of allowlisted gems are preserved
+- Order is maintained exactly as in the input
+- Memory efficient - we only store filtered results
+- Perfect for append-only versions files where gems may appear multiple times
 
 ## Future: Incremental Updates
 
@@ -108,8 +107,8 @@ impl FilteredIndex {
 **Strategy:**
 1. Store byte offset we've processed to
 2. Fetch `Range: bytes={offset}-` for incremental updates
-3. Parse new lines, update existing gems or append new ones
-4. Maintain stable ordering (first occurrence positions don't change)
+3. Filter new lines and append matching gems to existing filtered index
+4. All occurrences preserved - simple append operation
 
 ## Building
 

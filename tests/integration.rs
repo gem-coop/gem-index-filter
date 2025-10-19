@@ -1,4 +1,4 @@
-use facet::filter_versions_bytes;
+use facet::filter_versions_streaming;
 use std::collections::HashSet;
 
 /// Test with realistic versions file format including duplicates and yanked versions
@@ -24,28 +24,39 @@ rails 7.0.3,7.0.4 updated999888
     allowlist.insert("sinatra");
     allowlist.insert("active_model_serializers");
 
-    let result = filter_versions_bytes(input.as_bytes(), &allowlist).unwrap();
-    let result_str = String::from_utf8(result).unwrap();
+    let mut output = Vec::new();
+    filter_versions_streaming(input.as_bytes(), &mut output, &allowlist).unwrap();
+    let result_str = String::from_utf8(output).unwrap();
 
     // Check metadata is preserved
     assert!(result_str.starts_with("created_at: 2024-04-01T00:00:05Z\n---\n"));
-
-    // Check filtered gems are present
-    assert!(result_str.contains("rails"));
-    assert!(result_str.contains("sinatra"));
-    assert!(result_str.contains("active_model_serializers"));
 
     // Check excluded gems are absent
     assert!(!result_str.contains("activerecord"));
     assert!(!result_str.contains("openapi_first"));
     assert!(!result_str.contains("0mq"));
 
-    // Verify last occurrence is used for rails (should have updated999888)
-    assert!(result_str.contains("updated999888"));
-    assert!(!result_str.contains("abc123def456"));
+    // All occurrences should be preserved
+    let lines: Vec<&str> = result_str.lines().skip(2).collect();
+    assert_eq!(lines.len(), 5); // rails (2x), sinatra (1x), active_model_serializers (2x)
 
-    // Verify last occurrence for active_model_serializers
-    assert!(result_str.contains("0.9.11"));
+    // Verify both rails occurrences are present
+    assert!(result_str.contains("rails 7.0.0,7.0.1,7.0.2 abc123def456"));
+    assert!(result_str.contains("rails 7.0.3,7.0.4 updated999888"));
+
+    // Verify both active_model_serializers occurrences are present
+    assert!(result_str.contains("active_model_serializers -0.9.10 7ad37af4aec8cc089e409e1fdec86f3d"));
+    assert!(result_str.contains("active_model_serializers 0.9.11 a6d40e97b289ee6c806e5e9f7031623b"));
+
+    // Verify sinatra is present
+    assert!(result_str.contains("sinatra 3.0.0,3.0.1 123456789abc"));
+
+    // Verify order is preserved (rails, sinatra, active_model_serializers, active_model_serializers, rails)
+    assert_eq!(lines[0], "rails 7.0.0,7.0.1,7.0.2 abc123def456");
+    assert_eq!(lines[1], "sinatra 3.0.0,3.0.1 123456789abc");
+    assert_eq!(lines[2], "active_model_serializers -0.9.10 7ad37af4aec8cc089e409e1fdec86f3d");
+    assert_eq!(lines[3], "active_model_serializers 0.9.11 a6d40e97b289ee6c806e5e9f7031623b");
+    assert_eq!(lines[4], "rails 7.0.3,7.0.4 updated999888");
 }
 
 #[test]
@@ -63,8 +74,9 @@ banana 1.0.0 ddd444
     allowlist.insert("zebra");
     allowlist.insert("mango");
 
-    let result = filter_versions_bytes(input.as_bytes(), &allowlist).unwrap();
-    let result_str = String::from_utf8(result).unwrap();
+    let mut output = Vec::new();
+    filter_versions_streaming(input.as_bytes(), &mut output, &allowlist).unwrap();
+    let result_str = String::from_utf8(output).unwrap();
 
     // Split into lines and find gem entries
     let lines: Vec<&str> = result_str.lines().collect();
@@ -87,8 +99,9 @@ sinatra 3.0.0 def456
 
     let allowlist = HashSet::new();
 
-    let result = filter_versions_bytes(input.as_bytes(), &allowlist).unwrap();
-    let result_str = String::from_utf8(result).unwrap();
+    let mut output = Vec::new();
+    filter_versions_streaming(input.as_bytes(), &mut output, &allowlist).unwrap();
+    let result_str = String::from_utf8(output).unwrap();
 
     // Should only have metadata
     assert_eq!(result_str, "created_at: 2024-04-01T00:00:05Z\n---\n");
@@ -106,8 +119,9 @@ sinatra 3.0.0 def456
     allowlist.insert("rails");
     allowlist.insert("sinatra");
 
-    let result = filter_versions_bytes(input.as_bytes(), &allowlist).unwrap();
-    let result_str = String::from_utf8(result).unwrap();
+    let mut output = Vec::new();
+    filter_versions_streaming(input.as_bytes(), &mut output, &allowlist).unwrap();
+    let result_str = String::from_utf8(output).unwrap();
 
     assert!(result_str.contains("rails 7.0.0 abc123"));
     assert!(result_str.contains("sinatra 3.0.0 def456"));
@@ -123,9 +137,37 @@ rails -7.0.0,7.0.1 abc123
     let mut allowlist = HashSet::new();
     allowlist.insert("rails");
 
-    let result = filter_versions_bytes(input.as_bytes(), &allowlist).unwrap();
-    let result_str = String::from_utf8(result).unwrap();
+    let mut output = Vec::new();
+    filter_versions_streaming(input.as_bytes(), &mut output, &allowlist).unwrap();
+    let result_str = String::from_utf8(output).unwrap();
 
     // Yanked version marker should be preserved
     assert!(result_str.contains("-7.0.0"));
+}
+
+#[test]
+fn test_duplicate_gems_all_preserved() {
+    let input = r#"created_at: 2024-04-01T00:00:05Z
+---
+rails 1.0.0 aaa111
+other_gem 1.0.0 bbb222
+rails 2.0.0 ccc333
+another_gem 1.0.0 ddd444
+rails 3.0.0 eee555
+"#;
+
+    let mut allowlist = HashSet::new();
+    allowlist.insert("rails");
+
+    let mut output = Vec::new();
+    filter_versions_streaming(input.as_bytes(), &mut output, &allowlist).unwrap();
+    let result_str = String::from_utf8(output).unwrap();
+
+    let lines: Vec<&str> = result_str.lines().skip(2).collect();
+
+    // All 3 occurrences of rails should be present
+    assert_eq!(lines.len(), 3);
+    assert_eq!(lines[0], "rails 1.0.0 aaa111");
+    assert_eq!(lines[1], "rails 2.0.0 ccc333");
+    assert_eq!(lines[2], "rails 3.0.0 eee555");
 }

@@ -1,179 +1,138 @@
-use crate::parser::{GemLine, VersionsFile};
-use rustc_hash::FxHashMap;
 use std::collections::HashSet;
+use std::io::{BufRead, BufReader, Read, Write};
 
-/// Entry tracking first occurrence and last content
-#[derive(Debug)]
-struct GemEntry {
-    first_line_number: usize,
-    last_content: String,
-}
-
-/// Filter versions file by allowlist, preserving original order and using last occurrence
+/// Stream and filter versions file by first word (gem name) with zero memory retention
 ///
-/// When a gem appears multiple times:
-/// - Position is determined by first occurrence
-/// - Content (versions + MD5) is taken from last occurrence
-pub fn filter_versions(versions: VersionsFile, allowlist: &HashSet<&str>) -> FilteredVersions {
-    let mut gems: FxHashMap<String, GemEntry> = FxHashMap::default();
+/// This function:
+/// - Reads input line by line
+/// - Passes through metadata until "---" separator
+/// - Checks first word (space-separated) against allowlist
+/// - Immediately writes matching lines to output
+/// - Ignores everything after the first word until newline
+/// - Retains only the current line buffer in memory
+pub fn filter_versions_streaming<R: Read, W: Write>(
+    input: R,
+    output: &mut W,
+    allowlist: &HashSet<&str>,
+) -> std::io::Result<()> {
+    let mut reader = BufReader::new(input);
+    let mut line = String::new();
 
-    // Process all entries, tracking first position and last content
-    for entry in versions.entries {
-        if allowlist.contains(entry.name.as_str()) {
-            gems.entry(entry.name.clone())
-                .and_modify(|e| {
-                    // Update to last occurrence content
-                    e.last_content = entry.content.clone();
-                })
-                .or_insert(GemEntry {
-                    first_line_number: entry.line_number,
-                    last_content: entry.content,
-                });
+    // Pass through metadata until separator "---"
+    loop {
+        line.clear();
+        let n = reader.read_line(&mut line)?;
+        if n == 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "No separator found in versions file",
+            ));
+        }
+
+        output.write_all(line.as_bytes())?;
+
+        if line.trim() == "---" {
+            break;
         }
     }
 
-    // Convert to sorted vec by original position
-    let mut sorted_gems: Vec<_> = gems
-        .into_iter()
-        .map(|(name, entry)| GemLine {
-            line_number: entry.first_line_number,
-            name,
-            content: entry.last_content,
-        })
-        .collect();
-
-    sorted_gems.sort_by_key(|g| g.line_number);
-
-    FilteredVersions {
-        metadata: versions.metadata,
-        entries: sorted_gems,
-    }
-}
-
-/// Filtered versions ready for output
-pub struct FilteredVersions {
-    pub metadata: String,
-    pub entries: Vec<GemLine>,
-}
-
-impl FilteredVersions {
-    /// Serialize to bytes in the original format
-    pub fn to_bytes(&self) -> Vec<u8> {
-        let mut result = Vec::new();
-        result.extend_from_slice(self.metadata.as_bytes());
-
-        for entry in &self.entries {
-            result.extend_from_slice(entry.name.as_bytes());
-            result.push(b' ');
-            result.extend_from_slice(entry.content.as_bytes());
-            result.push(b'\n');
+    // Filter gem entries by first word
+    loop {
+        line.clear();
+        let n = reader.read_line(&mut line)?;
+        if n == 0 {
+            break; // EOF
         }
 
-        result
-    }
-
-    /// Serialize to string
-    pub fn to_string(&self) -> String {
-        let mut result = self.metadata.clone();
-
-        for entry in &self.entries {
-            result.push_str(&entry.name);
-            result.push(' ');
-            result.push_str(&entry.content);
-            result.push('\n');
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
         }
 
-        result
+        // Extract first word (gem name)
+        if let Some(space_pos) = trimmed.find(' ') {
+            let gem_name = &trimmed[..space_pos];
+            if allowlist.contains(gem_name) {
+                output.write_all(line.as_bytes())?;
+            }
+        }
     }
+
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parser::VersionsFile;
 
     #[test]
-    fn test_filter_preserves_order() {
-        let versions = VersionsFile {
-            metadata: "created_at: 2024-04-01T00:00:05Z\n---\n".to_string(),
-            entries: vec![
-                GemLine {
-                    line_number: 1,
-                    name: "rails".to_string(),
-                    content: "7.0.0 abc123".to_string(),
-                },
-                GemLine {
-                    line_number: 2,
-                    name: "activerecord".to_string(),
-                    content: "7.0.0 def456".to_string(),
-                },
-                GemLine {
-                    line_number: 3,
-                    name: "sinatra".to_string(),
-                    content: "3.0.0 ghi789".to_string(),
-                },
-            ],
-        };
+    fn test_streaming_filter() {
+        let input = r#"created_at: 2024-04-01T00:00:05Z
+---
+rails 7.0.0 abc123
+activerecord 7.0.0 def456
+sinatra 3.0.0 ghi789
+rails 7.0.1 xyz999
+"#;
 
         let mut allowlist = HashSet::new();
+        allowlist.insert("rails");
         allowlist.insert("sinatra");
-        allowlist.insert("rails");
 
-        let filtered = filter_versions(versions, &allowlist);
+        let mut output = Vec::new();
+        filter_versions_streaming(input.as_bytes(), &mut output, &allowlist).unwrap();
 
-        assert_eq!(filtered.entries.len(), 2);
-        assert_eq!(filtered.entries[0].name, "rails"); // First in original
-        assert_eq!(filtered.entries[1].name, "sinatra"); // Second in original
+        let result = String::from_utf8(output).unwrap();
+
+        // Should contain metadata
+        assert!(result.contains("created_at: 2024-04-01T00:00:05Z"));
+        assert!(result.contains("---"));
+
+        // Should contain allowlisted gems
+        assert!(result.contains("rails 7.0.0 abc123"));
+        assert!(result.contains("sinatra 3.0.0 ghi789"));
+        assert!(result.contains("rails 7.0.1 xyz999"));
+
+        // Should NOT contain filtered gem
+        assert!(!result.contains("activerecord"));
     }
 
     #[test]
-    fn test_filter_uses_last_occurrence() {
-        let versions = VersionsFile {
-            metadata: "created_at: 2024-04-01T00:00:05Z\n---\n".to_string(),
-            entries: vec![
-                GemLine {
-                    line_number: 1,
-                    name: "rails".to_string(),
-                    content: "7.0.0 abc123".to_string(),
-                },
-                GemLine {
-                    line_number: 2,
-                    name: "activerecord".to_string(),
-                    content: "7.0.0 def456".to_string(),
-                },
-                GemLine {
-                    line_number: 3,
-                    name: "rails".to_string(),
-                    content: "7.0.1 xyz999".to_string(), // Updated version
-                },
-            ],
-        };
+    fn test_streaming_preserves_exact_format() {
+        let input = r#"created_at: 2024-04-01T00:00:05Z
+---
+rails 7.0.0 abc123
+"#;
 
         let mut allowlist = HashSet::new();
         allowlist.insert("rails");
 
-        let filtered = filter_versions(versions, &allowlist);
+        let mut output = Vec::new();
+        filter_versions_streaming(input.as_bytes(), &mut output, &allowlist).unwrap();
 
-        assert_eq!(filtered.entries.len(), 1);
-        assert_eq!(filtered.entries[0].line_number, 1); // Position from first
-        assert_eq!(filtered.entries[0].content, "7.0.1 xyz999"); // Content from last
+        let result = String::from_utf8(output).unwrap();
+        assert_eq!(result, input); // Should be identical for all-included case
     }
 
     #[test]
-    fn test_to_string_format() {
-        let filtered = FilteredVersions {
-            metadata: "created_at: 2024-04-01T00:00:05Z\n---\n".to_string(),
-            entries: vec![GemLine {
-                line_number: 1,
-                name: "rails".to_string(),
-                content: "7.0.0 abc123".to_string(),
-            }],
-        };
+    fn test_streaming_empty_allowlist() {
+        let input = r#"created_at: 2024-04-01T00:00:05Z
+---
+rails 7.0.0 abc123
+sinatra 3.0.0 ghi789
+"#;
 
-        let output = filtered.to_string();
-        assert_eq!(
-            output,
-            "created_at: 2024-04-01T00:00:05Z\n---\nrails 7.0.0 abc123\n"
-        );
+        let allowlist = HashSet::new();
+
+        let mut output = Vec::new();
+        filter_versions_streaming(input.as_bytes(), &mut output, &allowlist).unwrap();
+
+        let result = String::from_utf8(output).unwrap();
+
+        // Should only contain metadata
+        assert!(result.contains("created_at"));
+        assert!(result.contains("---"));
+        assert!(!result.contains("rails"));
+        assert!(!result.contains("sinatra"));
     }
 }
