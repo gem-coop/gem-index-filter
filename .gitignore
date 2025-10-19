@@ -1,0 +1,21 @@
+# Rust
+/target
+Cargo.lock
+
+# Test files
+test_allowlist.txt
+versions
+versions.txt
+versions.filtered
+filtered*.txt
+
+# IDE
+.idea
+.vscode
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db

@@ -1,0 +1,13 @@
+[package]
+name = "facet"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+rustc-hash = "2.0"
+
+[[bin]]
+name = "facet"
+path = "src/main.rs"
+
+[dev-dependencies]
