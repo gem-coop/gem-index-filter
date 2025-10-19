@@ -25,7 +25,7 @@ rails 7.0.3,7.0.4 updated999888
     allowlist.insert("active_model_serializers");
 
     let mut output = Vec::new();
-    filter_versions_streaming(input.as_bytes(), &mut output, &allowlist).unwrap();
+    filter_versions_streaming(input.as_bytes(), &mut output, &allowlist, false).unwrap();
     let result_str = String::from_utf8(output).unwrap();
 
     // Check metadata is preserved
@@ -75,7 +75,7 @@ banana 1.0.0 ddd444
     allowlist.insert("mango");
 
     let mut output = Vec::new();
-    filter_versions_streaming(input.as_bytes(), &mut output, &allowlist).unwrap();
+    filter_versions_streaming(input.as_bytes(), &mut output, &allowlist, false).unwrap();
     let result_str = String::from_utf8(output).unwrap();
 
     // Split into lines and find gem entries
@@ -100,7 +100,7 @@ sinatra 3.0.0 def456
     let allowlist = HashSet::new();
 
     let mut output = Vec::new();
-    filter_versions_streaming(input.as_bytes(), &mut output, &allowlist).unwrap();
+    filter_versions_streaming(input.as_bytes(), &mut output, &allowlist, false).unwrap();
     let result_str = String::from_utf8(output).unwrap();
 
     // Should only have metadata
@@ -120,7 +120,7 @@ sinatra 3.0.0 def456
     allowlist.insert("sinatra");
 
     let mut output = Vec::new();
-    filter_versions_streaming(input.as_bytes(), &mut output, &allowlist).unwrap();
+    filter_versions_streaming(input.as_bytes(), &mut output, &allowlist, false).unwrap();
     let result_str = String::from_utf8(output).unwrap();
 
     assert!(result_str.contains("rails 7.0.0 abc123"));
@@ -138,7 +138,7 @@ rails -7.0.0,7.0.1 abc123
     allowlist.insert("rails");
 
     let mut output = Vec::new();
-    filter_versions_streaming(input.as_bytes(), &mut output, &allowlist).unwrap();
+    filter_versions_streaming(input.as_bytes(), &mut output, &allowlist, false).unwrap();
     let result_str = String::from_utf8(output).unwrap();
 
     // Yanked version marker should be preserved
@@ -160,7 +160,7 @@ rails 3.0.0 eee555
     allowlist.insert("rails");
 
     let mut output = Vec::new();
-    filter_versions_streaming(input.as_bytes(), &mut output, &allowlist).unwrap();
+    filter_versions_streaming(input.as_bytes(), &mut output, &allowlist, false).unwrap();
     let result_str = String::from_utf8(output).unwrap();
 
     let lines: Vec<&str> = result_str.lines().skip(2).collect();
@@ -170,4 +170,72 @@ rails 3.0.0 eee555
     assert_eq!(lines[0], "rails 1.0.0 aaa111");
     assert_eq!(lines[1], "rails 2.0.0 ccc333");
     assert_eq!(lines[2], "rails 3.0.0 eee555");
+}
+
+#[test]
+fn test_strip_versions_integration() {
+    let input = r#"created_at: 2024-04-01T00:00:05Z
+---
+rails 7.0.0,7.0.1,7.0.2 abc123def456
+activerecord 7.0.0,7.0.1 fed456cba321
+sinatra 3.0.0,3.0.1 123456789abc
+rails 7.0.3,7.0.4 updated999888
+"#;
+
+    let mut allowlist = HashSet::new();
+    allowlist.insert("rails");
+    allowlist.insert("sinatra");
+
+    let mut output = Vec::new();
+    filter_versions_streaming(input.as_bytes(), &mut output, &allowlist, true).unwrap();
+    let result_str = String::from_utf8(output).unwrap();
+
+    // Check metadata is preserved
+    assert!(result_str.starts_with("created_at: 2024-04-01T00:00:05Z\n---\n"));
+
+    // Check stripped versions
+    assert!(result_str.contains("rails 0 abc123def456"));
+    assert!(result_str.contains("rails 0 updated999888"));
+    assert!(result_str.contains("sinatra 0 123456789abc"));
+
+    // Check original versions are gone
+    assert!(!result_str.contains("7.0.0,7.0.1,7.0.2"));
+    assert!(!result_str.contains("7.0.3,7.0.4"));
+    assert!(!result_str.contains("3.0.0,3.0.1"));
+
+    // Check excluded gem is absent
+    assert!(!result_str.contains("activerecord"));
+
+    // Verify both rails occurrences are present with stripped versions
+    let lines: Vec<&str> = result_str.lines().skip(2).collect();
+    assert_eq!(lines.len(), 3); // rails (2x), sinatra (1x)
+    assert_eq!(lines[0], "rails 0 abc123def456");
+    assert_eq!(lines[1], "sinatra 0 123456789abc");
+    assert_eq!(lines[2], "rails 0 updated999888");
+}
+
+#[test]
+fn test_strip_versions_with_yanked() {
+    let input = r#"created_at: 2024-04-01T00:00:05Z
+---
+active_model_serializers -0.9.10,0.9.11 7ad37af4aec8cc089e409e1fdec86f3d
+rails 7.0.0,7.0.1 abc123
+"#;
+
+    let mut allowlist = HashSet::new();
+    allowlist.insert("rails");
+    allowlist.insert("active_model_serializers");
+
+    let mut output = Vec::new();
+    filter_versions_streaming(input.as_bytes(), &mut output, &allowlist, true).unwrap();
+    let result_str = String::from_utf8(output).unwrap();
+
+    // Stripped versions should replace yanked versions too
+    assert!(result_str.contains("active_model_serializers 0 7ad37af4aec8cc089e409e1fdec86f3d"));
+    assert!(result_str.contains("rails 0 abc123"));
+
+    // Original version info should be gone
+    assert!(!result_str.contains("-0.9.10"));
+    assert!(!result_str.contains("0.9.11"));
+    assert!(!result_str.contains("7.0.0,7.0.1"));
 }

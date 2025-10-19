@@ -24,7 +24,7 @@
 //! allowlist.insert("rails");
 //! allowlist.insert("sinatra");
 //!
-//! filter_versions_streaming(input, &mut output, &allowlist).unwrap();
+//! filter_versions_streaming(input, &mut output, &allowlist, false).unwrap();
 //! ```
 
 pub mod filter;
