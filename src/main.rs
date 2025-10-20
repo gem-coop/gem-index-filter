@@ -1,4 +1,5 @@
 use facet::filter::filter_versions_streaming;
+use facet::FilterMode;
 use std::collections::HashSet;
 use std::env;
 use std::fs::File;
@@ -7,42 +8,115 @@ use std::io::{self, BufRead, BufReader};
 fn main() -> io::Result<()> {
     let args: Vec<String> = env::args().collect();
 
-    // Check for --strip-versions flag
+    // Parse flags
     let strip_versions = args.iter().any(|arg| arg == "--strip-versions");
 
-    // Filter out the flag to get positional arguments
+    // Find --allow and --block flags and extract their values
+    let mut allowlist_file: Option<&str> = None;
+    let mut blocklist_file: Option<&str> = None;
+    let mut i = 1; // Start after program name
+    while i < args.len() {
+        if args[i] == "--allow" {
+            if i + 1 < args.len() {
+                allowlist_file = Some(&args[i + 1]);
+                i += 2;
+            } else {
+                eprintln!("Error: --allow requires a file path");
+                std::process::exit(1);
+            }
+        } else if args[i] == "--block" {
+            if i + 1 < args.len() {
+                blocklist_file = Some(&args[i + 1]);
+                i += 2;
+            } else {
+                eprintln!("Error: --block requires a file path");
+                std::process::exit(1);
+            }
+        } else {
+            i += 1;
+        }
+    }
+
+    // Get positional arguments (excluding program name and flags)
     let positional_args: Vec<&String> = args.iter()
-        .filter(|arg| *arg != "--strip-versions" && arg.as_str() != args[0])
+        .skip(1)
+        .filter(|arg| {
+            *arg != "--strip-versions" &&
+            *arg != "--allow" &&
+            *arg != "--block" &&
+            !allowlist_file.map_or(false, |f| *arg == f) &&
+            !blocklist_file.map_or(false, |f| *arg == f)
+        })
         .collect();
 
-    if positional_args.len() < 2 {
-        eprintln!("Usage: facet [--strip-versions] <versions-file> <allowlist-file> [output-file]");
+    if positional_args.is_empty() {
+        eprintln!("Usage: facet [OPTIONS] <versions-file> [output-file]");
         eprintln!();
         eprintln!("Arguments:");
         eprintln!("  <versions-file>   Path to the versions file (or - for stdin)");
-        eprintln!("  <allowlist-file>  Path to file with gem names (one per line)");
         eprintln!("  [output-file]     Optional output file (defaults to stdout)");
         eprintln!();
         eprintln!("Options:");
+        eprintln!("  --allow <file>    Filter to only gems in allowlist file (one name per line)");
+        eprintln!("  --block <file>    Filter out gems in blocklist file (one name per line)");
         eprintln!("  --strip-versions  Replace version lists with '0' in output");
         eprintln!();
         eprintln!("Examples:");
-        eprintln!("  facet versions.txt allowlist.txt filtered.txt");
-        eprintln!("  facet --strip-versions versions.txt allowlist.txt filtered.txt");
-        eprintln!("  curl https://rubygems.org/versions | facet - allowlist.txt > filtered.txt");
+        eprintln!("  facet versions.txt                                      # Pass through all gems");
+        eprintln!("  facet --allow allowlist.txt versions.txt filtered.txt   # Filter to allowlist");
+        eprintln!("  facet --block blocklist.txt versions.txt filtered.txt   # Block specific gems");
+        eprintln!("  facet --allow allow.txt --block block.txt versions.txt  # Allow mode with blocked gems removed");
+        eprintln!("  facet --strip-versions versions.txt filtered.txt        # Strip versions");
+        eprintln!("  curl https://rubygems.org/versions | facet --allow allowlist.txt - > filtered.txt");
         std::process::exit(1);
     }
 
-    let versions_file = positional_args[0];
-    let allowlist_file = positional_args[1];
-    let output_file = positional_args.get(2);
+    let versions_file = positional_args[0].as_str();
+    let output_file = positional_args.get(1).map(|s| s.as_str());
 
-    // Read allowlist
-    let allowlist_owned = read_allowlist(allowlist_file)?;
-    eprintln!("Loaded {} gems from allowlist", allowlist_owned.len());
+    // Read filter lists if specified
+    let allowlist_owned = allowlist_file.map(read_gem_list).transpose()?;
+    let blocklist_owned = blocklist_file.map(read_gem_list).transpose()?;
 
-    // Convert to &str references for API
-    let allowlist: HashSet<&str> = allowlist_owned.iter().map(|s| s.as_str()).collect();
+    // Determine filter mode with preprocessing optimization:
+    // If both allow and block are specified, preprocess by removing blocked gems from allowlist
+    // This reduces to just 2 runtime modes: Allow or Block (or Passthrough)
+    let filter_set_owned: Option<HashSet<String>> = match (allowlist_owned, blocklist_owned) {
+        (Some(mut allow), Some(block)) => {
+            // Optimization: allowlist - blocklist, then use Allow mode
+            let original_count = allow.len();
+            allow.retain(|gem| !block.contains(gem));
+            eprintln!(
+                "Loaded {} gems from allowlist, {} from blocklist ({} gems after removing blocked)",
+                original_count,
+                block.len(),
+                allow.len()
+            );
+            Some(allow)
+        }
+        (Some(allow), None) => {
+            eprintln!("Loaded {} gems from allowlist", allow.len());
+            Some(allow)
+        }
+        (None, Some(block)) => {
+            eprintln!("Loaded {} gems from blocklist", block.len());
+            Some(block)
+        }
+        (None, None) => None,
+    };
+
+    // Create the filter mode by converting String references to &str
+    // Keep owned set and converted set separate to manage lifetimes
+    let filter_set_refs: Option<HashSet<&str>> = filter_set_owned.as_ref()
+        .map(|set| set.iter().map(|s| s.as_str()).collect());
+
+    // Determine which mode to use based on what was specified
+    let mode = match (&filter_set_refs, allowlist_file, blocklist_file) {
+        (Some(set), Some(_), Some(_)) => FilterMode::Allow(set),  // Both: use Allow with preprocessed set
+        (Some(set), Some(_), None) => FilterMode::Allow(set),     // Allow only
+        (Some(set), None, Some(_)) => FilterMode::Block(set),     // Block only
+        _ => FilterMode::Passthrough,                              // Neither
+    };
 
     // Open input
     let input: Box<dyn io::Read> = if versions_file == "-" {
@@ -51,38 +125,33 @@ fn main() -> io::Result<()> {
         Box::new(File::open(versions_file)?)
     };
 
-    // Stream and filter directly to output
-    if strip_versions {
-        eprintln!("Streaming and filtering versions file (stripping version info)...");
-    } else {
-        eprintln!("Streaming and filtering versions file...");
-    }
-
+    // Stream and filter
     if let Some(output_path) = output_file {
         let mut output = File::create(output_path)?;
-        filter_versions_streaming(input, &mut output, &allowlist, strip_versions)?;
+        filter_versions_streaming(input, &mut output, mode, strip_versions)?;
         eprintln!("Written to {}", output_path);
     } else {
         let mut output = io::stdout();
-        filter_versions_streaming(input, &mut output, &allowlist, strip_versions)?;
+        filter_versions_streaming(input, &mut output, mode, strip_versions)?;
     }
 
     Ok(())
 }
 
-/// Read allowlist from file (one gem name per line)
-fn read_allowlist(path: &str) -> io::Result<HashSet<String>> {
+/// Read gem list from file (one gem name per line, supports comments with #)
+fn read_gem_list(path: &str) -> io::Result<HashSet<String>> {
     let file = File::open(path)?;
     let reader = BufReader::new(file);
-    let mut allowlist = HashSet::new();
+    let mut gems = HashSet::new();
 
     for line in reader.lines() {
         let line = line?;
         let gem_name = line.trim();
-        if !gem_name.is_empty() {
-            allowlist.insert(gem_name.to_string());
+        // Skip empty lines and comments
+        if !gem_name.is_empty() && !gem_name.starts_with('#') {
+            gems.insert(gem_name.to_string());
         }
     }
 
-    Ok(allowlist)
+    Ok(gems)
 }

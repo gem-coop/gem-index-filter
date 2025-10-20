@@ -5,9 +5,11 @@ Fast filtering for RubyGems `versions` index files. Designed for memory-constrai
 ## Features
 
 - **Streaming parser**: Handles 20+ MB files with minimal memory footprint
-- **Simple filtering**: If a gem is in the allowlist, all occurrences are included
+- **Flexible filtering**: Allow mode, block mode, or passthrough (no filtering)
+- **Combined filters**: Use `--allow` and `--block` together (allowlist - blocklist)
+- **Version stripping**: Optionally replace version lists with `0` to reduce size
 - **Order preservation**: Maintains exact original order from the input file
-- **Fast lookups**: O(1) allowlist checks using HashSet
+- **Fast lookups**: O(1) gem name checks using HashSet
 - **Tested**: Comprehensive test suite with real-world data
 
 ## Performance
@@ -22,36 +24,78 @@ Filtering a 21MB versions file with 10k gem allowlist:
 ### Command Line
 
 ```bash
-# Filter a versions file with an allowlist
-facet versions.txt allowlist.txt filtered.txt
+facet [OPTIONS] <versions-file> [output-file]
 
-# Stream from stdin
-curl https://rubygems.org/versions | facet - allowlist.txt > filtered.txt
+Options:
+  --allow <file>    Filter to only gems in allowlist file (one name per line)
+  --block <file>    Filter out gems in blocklist file (one name per line)
+  --strip-versions  Replace version lists with '0' in output
 ```
 
-Allowlist format (one gem name per line):
+**Examples:**
+
+```bash
+# Pass through all gems (no filtering)
+facet versions.txt
+
+# Filter to only gems in allowlist
+facet --allow allowlist.txt versions.txt filtered.txt
+
+# Block specific gems
+facet --block blocklist.txt versions.txt filtered.txt
+
+# Allow mode with blocked gems removed (allowlist - blocklist)
+facet --allow allow.txt --block block.txt versions.txt filtered.txt
+
+# Strip version information (replace with '0')
+facet --strip-versions versions.txt filtered.txt
+
+# Stream from stdin
+curl https://rubygems.org/versions | facet --allow allowlist.txt - > filtered.txt
+```
+
+**Filter file format** (one gem name per line, `#` for comments):
+
 ```text
-# Comments are supported
 rails
 sinatra
 activerecord
 puma
+# This is a comment
 ```
 
 ### Library
 
 ```rust
-use facet::filter_versions_bytes;
+use facet::{filter_versions_streaming, FilterMode};
 use std::collections::HashSet;
 use std::fs::File;
 
 let input = File::open("versions")?;
+let mut output = File::create("versions.filtered")?;
+
+// Create allowlist
 let mut allowlist = HashSet::new();
 allowlist.insert("rails");
 allowlist.insert("sinatra");
 
-let filtered = filter_versions_bytes(input, &allowlist)?;
-std::fs::write("versions.filtered", filtered)?;
+// Stream and filter
+filter_versions_streaming(input, &mut output, FilterMode::Allow(&allowlist), false)?;
+```
+
+**Other modes:**
+
+```rust
+// Block mode - exclude specific gems
+let mut blocklist = HashSet::new();
+blocklist.insert("big-gem");
+filter_versions_streaming(input, &mut output, FilterMode::Block(&blocklist), false)?;
+
+// Passthrough mode - no filtering
+filter_versions_streaming(input, &mut output, FilterMode::Passthrough, false)?;
+
+// Strip versions while filtering
+filter_versions_streaming(input, &mut output, FilterMode::Allow(&allowlist), true)?;
 ```
 
 ## Versions File Format
@@ -74,16 +118,21 @@ When a gem appears multiple times, the last occurrence has the authoritative MD5
 ## How It Works
 
 1. **Parse**: Stream input line-by-line using BufReader
-2. **Filter**: For each line, check if gem name is in the allowlist
-3. **Output**: Include all matching lines in original order
+2. **Filter**: Based on mode, check gem name against filter list:
+   - **Passthrough**: Include all gems (no filtering)
+   - **Allow mode**: Include only gems where `gemlist.contains(gemname) == true`
+   - **Block mode**: Include only gems where `gemlist.contains(gemname) == false`
+   - **Combined**: Preprocess `allowlist - blocklist` at startup, then use Allow mode
+3. **Output**: Write matching lines immediately in original order
 
-### Why This Works
+### Design Principles
 
-The filtering is intentionally simple:
-- All occurrences of allowlisted gems are preserved
-- Order is maintained exactly as in the input
-- Memory efficient - we only store filtered results
-- Perfect for append-only versions files where gems may appear multiple times
+The filtering is optimized for performance and simplicity:
+- **Streaming architecture**: Only current line buffer held in memory
+- **Mode hoisting**: Filter mode checked once before loop, not per-line
+- **Unified filtering**: Single `process_filtered()` function handles both Allow/Block modes
+- **Order preservation**: Maintains exact original order from input
+- **All occurrences preserved**: Perfect for append-only files where gems appear multiple times
 
 ## Future: Incremental Updates
 
