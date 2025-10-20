@@ -9,15 +9,6 @@ Fast filtering for RubyGems `versions` index files. Designed for memory-constrai
 - **Combined filters**: Use `--allow` and `--block` together (allowlist - blocklist)
 - **Version stripping**: Optionally replace version lists with `0` to reduce size
 - **Order preservation**: Maintains exact original order from the input file
-- **Fast lookups**: O(1) gem name checks using HashSet
-- **Tested**: Comprehensive test suite with real-world data
-
-## Performance
-
-Filtering a 21MB versions file with 10k gem allowlist:
-- Time: <100ms
-- Memory: ~3MB
-- Output: Typically <1MB
 
 ## Usage
 
@@ -36,19 +27,19 @@ Options:
 
 ```bash
 # Pass through all gems (no filtering)
-facet versions.txt
+facet versions
 
 # Filter to only gems in allowlist
-facet --allow allowlist.txt versions.txt filtered.txt
+facet --allow allowlist.txt versions filtered.txt
 
 # Block specific gems
-facet --block blocklist.txt versions.txt filtered.txt
+facet --block blocklist.txt versions filtered.txt
 
 # Allow mode with blocked gems removed (allowlist - blocklist)
-facet --allow allow.txt --block block.txt versions.txt filtered.txt
+facet --allow allow.txt --block block.txt versions filtered.txt
 
 # Strip version information (replace with '0')
-facet --strip-versions versions.txt filtered.txt
+facet --strip-versions versions filtered.txt
 
 # Stream from stdin
 curl https://rubygems.org/versions | facet --allow allowlist.txt - > filtered.txt
@@ -61,7 +52,6 @@ rails
 sinatra
 activerecord
 puma
-# This is a comment
 ```
 
 ### Library
@@ -129,10 +119,8 @@ When a gem appears multiple times, the last occurrence has the authoritative MD5
 
 The filtering is optimized for performance and simplicity:
 - **Streaming architecture**: Only current line buffer held in memory
-- **Mode hoisting**: Filter mode checked once before loop, not per-line
-- **Unified filtering**: Single `process_filtered()` function handles both Allow/Block modes
 - **Order preservation**: Maintains exact original order from input
-- **All occurrences preserved**: Perfect for append-only files where gems appear multiple times
+- **All occurrences preserved**: versions is append-only
 
 ## Future: Incremental Updates
 
@@ -179,7 +167,7 @@ cargo build --target wasm32-wasi --release
 cargo test
 
 # Test with real data (if you have a versions file)
-cargo run --release -- versions.txt test_allowlist.txt output.txt
+cargo run --release -- versions output.txt
 ```
 
 ## License
