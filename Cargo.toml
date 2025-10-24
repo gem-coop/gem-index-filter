@@ -2,6 +2,13 @@
 name = "gem-index-filter"
 version = "0.1.0"
 edition = "2021"
+description = "Fast streaming filter for RubyGems versions index files"
+license = "MIT"
+repository = "https://github.com/gem-coop/gem-index-filter"
+homepage = "https://github.com/gem-coop/gem-index-filter"
+readme = "README.md"
+keywords = ["rubygems", "compact_index", "bundler", "filter", "streaming"]
+categories = ["command-line-utilities", "parser-implementations"]
 
 [dependencies]
 rustc-hash = "2.0"
