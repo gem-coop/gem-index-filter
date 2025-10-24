@@ -1,4 +1,4 @@
-# Facet
+# gem-index-filter
 
 Fast filtering for RubyGems `versions` index files. Designed for memory-constrained environments like Fastly Compute edge workers.
 
@@ -15,7 +15,7 @@ Fast filtering for RubyGems `versions` index files. Designed for memory-constrai
 ### Command Line
 
 ```bash
-facet [OPTIONS] <versions-file> [output-file]
+gem-index-filter [OPTIONS] <versions-file> [output-file]
 
 Options:
   --allow <file>    Filter to only gems in allowlist file (one name per line)
@@ -27,22 +27,22 @@ Options:
 
 ```bash
 # Pass through all gems (no filtering)
-facet versions
+gem-index-filter versions
 
 # Filter to only gems in allowlist
-facet --allow allowlist.txt versions filtered.txt
+gem-index-filter --allow allowlist.txt versions filtered.txt
 
 # Block specific gems
-facet --block blocklist.txt versions filtered.txt
+gem-index-filter --block blocklist.txt versions filtered.txt
 
 # Allow mode with blocked gems removed (allowlist - blocklist)
-facet --allow allow.txt --block block.txt versions filtered.txt
+gem-index-filter --allow allow.txt --block block.txt versions filtered.txt
 
 # Strip version information (replace with '0')
-facet --strip-versions versions filtered.txt
+gem-index-filter --strip-versions versions filtered.txt
 
 # Stream from stdin
-curl https://rubygems.org/versions | facet --allow allowlist.txt - > filtered.txt
+curl https://rubygems.org/versions | gem-index-filter --allow allowlist.txt - > filtered.txt
 ```
 
 **Filter file format** (one gem name per line, `#` for comments):
@@ -57,7 +57,7 @@ puma
 ### Library
 
 ```rust
-use facet::{filter_versions_streaming, FilterMode};
+use gem_index_filter::{filter_versions_streaming, FilterMode};
 use std::collections::HashSet;
 use std::fs::File;
 

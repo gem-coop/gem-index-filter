@@ -1,5 +1,5 @@
 [package]
-name = "facet"
+name = "gem-index-filter"
 version = "0.1.0"
 edition = "2021"
 
@@ -7,7 +7,7 @@ edition = "2021"
 rustc-hash = "2.0"
 
 [[bin]]
-name = "facet"
+name = "gem-index-filter"
 path = "src/main.rs"
 
 [dev-dependencies]

@@ -1,4 +1,4 @@
-use facet::{filter_versions_streaming, FilterMode};
+use gem_index_filter::{filter_versions_streaming, FilterMode};
 use std::collections::HashSet;
 
 /// Test with realistic versions file format including duplicates and yanked versions

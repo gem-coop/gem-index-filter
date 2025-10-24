@@ -1,4 +1,4 @@
-//! Facet - Fast streaming filter for RubyGems versions index
+//! gem-index-filter - Fast streaming filter for RubyGems versions index
 //!
 //! This library provides efficient streaming filtering of the RubyGems
 //! versions file (https://rubygems.org/versions). It's designed to run in memory-
@@ -17,7 +17,7 @@
 //! **Allow mode** - include only specific gems:
 //!
 //! ```no_run
-//! use facet::{filter_versions_streaming, FilterMode};
+//! use gem_index_filter::{filter_versions_streaming, FilterMode};
 //! use std::collections::HashSet;
 //! use std::fs::File;
 //!
@@ -32,7 +32,7 @@
 //! **Block mode** - exclude specific gems:
 //!
 //! ```no_run
-//! # use facet::{filter_versions_streaming, FilterMode};
+//! # use gem_index_filter::{filter_versions_streaming, FilterMode};
 //! # use std::collections::HashSet;
 //! # use std::fs::File;
 //! let input = File::open("versions").unwrap();
@@ -45,7 +45,7 @@
 //! **Passthrough mode** - no filtering:
 //!
 //! ```no_run
-//! # use facet::{filter_versions_streaming, FilterMode};
+//! # use gem_index_filter::{filter_versions_streaming, FilterMode};
 //! # use std::fs::File;
 //! let input = File::open("versions").unwrap();
 //! let mut output = File::create("versions.filtered").unwrap();

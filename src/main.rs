@@ -1,5 +1,5 @@
-use facet::filter::filter_versions_streaming;
-use facet::FilterMode;
+use gem_index_filter::filter::filter_versions_streaming;
+use gem_index_filter::FilterMode;
 use std::collections::HashSet;
 use std::env;
 use std::fs::File;
@@ -50,7 +50,7 @@ fn main() -> io::Result<()> {
         .collect();
 
     if positional_args.is_empty() {
-        eprintln!("Usage: facet [OPTIONS] <versions-file> [output-file]");
+        eprintln!("Usage: gem-index-filter [OPTIONS] <versions-file> [output-file]");
         eprintln!();
         eprintln!("Arguments:");
         eprintln!("  <versions-file>   Path to the versions file (or - for stdin)");
@@ -62,11 +62,11 @@ fn main() -> io::Result<()> {
         eprintln!("  --strip-versions  Replace version lists with '0' in output");
         eprintln!();
         eprintln!("Examples:");
-        eprintln!("  facet versions.txt                                      # Pass through all gems");
-        eprintln!("  facet --allow allowlist.txt versions.txt filtered.txt   # Filter to allowlist");
-        eprintln!("  facet --block blocklist.txt versions.txt filtered.txt   # Block specific gems");
-        eprintln!("  facet --allow allow.txt --block block.txt versions.txt  # Allow mode with blocked gems removed");
-        eprintln!("  facet --strip-versions versions.txt filtered.txt        # Strip versions");
+        eprintln!("  gem-index-filter versions.txt                                      # Pass through all gems");
+        eprintln!("  gem-index-filter --allow allowlist.txt versions.txt filtered.txt   # Filter to allowlist");
+        eprintln!("  gem-index-filter --block blocklist.txt versions.txt filtered.txt   # Block specific gems");
+        eprintln!("  gem-index-filter --allow allow.txt --block block.txt versions.txt  # Allow mode with blocked gems removed");
+        eprintln!("  gem-index-filter --strip-versions versions.txt filtered.txt        # Strip versions");
         eprintln!("  curl https://rubygems.org/versions | facet --allow allowlist.txt - > filtered.txt");
         std::process::exit(1);
     }
