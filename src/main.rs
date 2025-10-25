@@ -1,5 +1,5 @@
 use gem_index_filter::filter::filter_versions_streaming;
-use gem_index_filter::FilterMode;
+use gem_index_filter::{FilterMode, VersionOutput};
 use std::collections::HashSet;
 use std::env;
 use std::fs::File;
@@ -9,7 +9,11 @@ fn main() -> io::Result<()> {
     let args: Vec<String> = env::args().collect();
 
     // Parse flags
-    let strip_versions = args.iter().any(|arg| arg == "--strip-versions");
+    let version_output = if args.iter().any(|arg| arg == "--strip-versions") {
+        VersionOutput::Strip
+    } else {
+        VersionOutput::Preserve
+    };
 
     // Find --allow and --block flags and extract their values
     let mut allowlist_file: Option<&str> = None;
@@ -128,11 +132,11 @@ fn main() -> io::Result<()> {
     // Stream and filter
     if let Some(output_path) = output_file {
         let mut output = File::create(output_path)?;
-        filter_versions_streaming(input, &mut output, mode, strip_versions)?;
+        filter_versions_streaming(input, &mut output, mode, version_output)?;
         eprintln!("Written to {}", output_path);
     } else {
         let mut output = io::stdout();
-        filter_versions_streaming(input, &mut output, mode, strip_versions)?;
+        filter_versions_streaming(input, &mut output, mode, version_output)?;
     }
 
     Ok(())

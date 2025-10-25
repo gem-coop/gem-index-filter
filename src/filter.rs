@@ -12,6 +12,15 @@ pub enum FilterMode<'a> {
     Block(&'a HashSet<&'a str>),
 }
 
+/// Version output mode
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VersionOutput {
+    /// Preserve original version information
+    Preserve,
+    /// Strip versions, replacing with '0'
+    Strip,
+}
+
 /// Stream and filter versions file by first word (gem name) with zero memory retention
 ///
 /// This function:
@@ -26,7 +35,7 @@ pub fn filter_versions_streaming<R: Read, W: Write>(
     input: R,
     output: &mut W,
     mode: FilterMode,
-    strip_versions: bool,
+    version_output: VersionOutput,
 ) -> std::io::Result<()> {
     let mut reader = BufReader::new(input);
 
@@ -36,9 +45,9 @@ pub fn filter_versions_streaming<R: Read, W: Write>(
     // Branch to specialized filter function based on mode
     // This hoists the mode check outside the hot loop for performance
     match mode {
-        FilterMode::Passthrough => process_passthrough(&mut reader, output, strip_versions),
-        FilterMode::Allow(allowlist) => process_filtered(&mut reader, output, allowlist, true, strip_versions),
-        FilterMode::Block(blocklist) => process_filtered(&mut reader, output, blocklist, false, strip_versions),
+        FilterMode::Passthrough => process_passthrough(&mut reader, output, version_output),
+        FilterMode::Allow(allowlist) => process_filtered(&mut reader, output, allowlist, true, version_output),
+        FilterMode::Block(blocklist) => process_filtered(&mut reader, output, blocklist, false, version_output),
     }
 }
 
@@ -73,7 +82,7 @@ fn pass_through_metadata<R: Read, W: Write>(
 fn process_passthrough<R: Read, W: Write>(
     reader: &mut BufReader<R>,
     output: &mut W,
-    strip_versions: bool,
+    version_output: VersionOutput,
 ) -> std::io::Result<()> {
     let mut line = String::new();
 
@@ -89,10 +98,9 @@ fn process_passthrough<R: Read, W: Write>(
             continue;
         }
 
-        if strip_versions {
-            write_gem_line_stripped(trimmed, output)?;
-        } else {
-            output.write_all(line.as_bytes())?;
+        match version_output {
+            VersionOutput::Strip => write_gem_line_stripped(trimmed, output)?,
+            VersionOutput::Preserve => output.write_all(line.as_bytes())?,
         }
     }
 
@@ -108,7 +116,7 @@ fn process_filtered<R: Read, W: Write>(
     output: &mut W,
     gemlist: &HashSet<&str>,
     include_on_match: bool,
-    strip_versions: bool,
+    version_output: VersionOutput,
 ) -> std::io::Result<()> {
     let mut line = String::new();
 
@@ -128,7 +136,7 @@ fn process_filtered<R: Read, W: Write>(
         if let Some(gem_name) = extract_gem_name(trimmed) {
             let is_in_list = gemlist.contains(gem_name);
             if is_in_list == include_on_match {
-                write_gem_line(trimmed, &line, output, strip_versions)?;
+                write_gem_line(trimmed, &line, output, version_output)?;
             }
         }
     }
@@ -148,12 +156,11 @@ fn write_gem_line<W: Write>(
     trimmed: &str,
     original_line: &str,
     output: &mut W,
-    strip_versions: bool,
+    version_output: VersionOutput,
 ) -> std::io::Result<()> {
-    if strip_versions {
-        write_gem_line_stripped(trimmed, output)
-    } else {
-        output.write_all(original_line.as_bytes())
+    match version_output {
+        VersionOutput::Strip => write_gem_line_stripped(trimmed, output),
+        VersionOutput::Preserve => output.write_all(original_line.as_bytes()),
     }
 }
 
@@ -194,7 +201,7 @@ rails 7.0.1 xyz999
         allowlist.insert("sinatra");
 
         let mut output = Vec::new();
-        filter_versions_streaming(input.as_bytes(), &mut output, FilterMode::Allow(&allowlist), false).unwrap();
+        filter_versions_streaming(input.as_bytes(), &mut output, FilterMode::Allow(&allowlist), VersionOutput::Preserve).unwrap();
 
         let result = String::from_utf8(output).unwrap();
 
@@ -222,7 +229,7 @@ rails 7.0.0 abc123
         allowlist.insert("rails");
 
         let mut output = Vec::new();
-        filter_versions_streaming(input.as_bytes(), &mut output, FilterMode::Allow(&allowlist), false).unwrap();
+        filter_versions_streaming(input.as_bytes(), &mut output, FilterMode::Allow(&allowlist), VersionOutput::Preserve).unwrap();
 
         let result = String::from_utf8(output).unwrap();
         assert_eq!(result, input); // Should be identical for all-included case
@@ -239,7 +246,7 @@ sinatra 3.0.0 ghi789
         let allowlist = HashSet::new();
 
         let mut output = Vec::new();
-        filter_versions_streaming(input.as_bytes(), &mut output, FilterMode::Allow(&allowlist), false).unwrap();
+        filter_versions_streaming(input.as_bytes(), &mut output, FilterMode::Allow(&allowlist), VersionOutput::Preserve).unwrap();
 
         let result = String::from_utf8(output).unwrap();
 
@@ -260,7 +267,7 @@ sinatra 3.0.0 ghi789
 "#;
 
         let mut output = Vec::new();
-        filter_versions_streaming(input.as_bytes(), &mut output, FilterMode::Passthrough, false).unwrap();
+        filter_versions_streaming(input.as_bytes(), &mut output, FilterMode::Passthrough, VersionOutput::Preserve).unwrap();
 
         let result = String::from_utf8(output).unwrap();
 
@@ -289,7 +296,7 @@ puma 5.0.0 xyz999
         blocklist.insert("puma");
 
         let mut output = Vec::new();
-        filter_versions_streaming(input.as_bytes(), &mut output, FilterMode::Block(&blocklist), false).unwrap();
+        filter_versions_streaming(input.as_bytes(), &mut output, FilterMode::Block(&blocklist), VersionOutput::Preserve).unwrap();
 
         let result = String::from_utf8(output).unwrap();
 
@@ -319,7 +326,7 @@ sinatra 3.0.0 ghi789
         blocklist.insert("activerecord");
 
         let mut output = Vec::new();
-        filter_versions_streaming(input.as_bytes(), &mut output, FilterMode::Block(&blocklist), true).unwrap();
+        filter_versions_streaming(input.as_bytes(), &mut output, FilterMode::Block(&blocklist), VersionOutput::Strip).unwrap();
 
         let result = String::from_utf8(output).unwrap();
 
@@ -345,7 +352,7 @@ puma 5.0.0 ghi789 extra_field
         allowlist.insert("puma");
 
         let mut output = Vec::new();
-        filter_versions_streaming(input.as_bytes(), &mut output, FilterMode::Allow(&allowlist), true).unwrap();
+        filter_versions_streaming(input.as_bytes(), &mut output, FilterMode::Allow(&allowlist), VersionOutput::Strip).unwrap();
 
         let result = String::from_utf8(output).unwrap();
 
@@ -372,7 +379,7 @@ rails 7.0.3,7.0.4 updated999888
         allowlist.insert("sinatra");
 
         let mut output = Vec::new();
-        filter_versions_streaming(input.as_bytes(), &mut output, FilterMode::Allow(&allowlist), true).unwrap();
+        filter_versions_streaming(input.as_bytes(), &mut output, FilterMode::Allow(&allowlist), VersionOutput::Strip).unwrap();
 
         let result = String::from_utf8(output).unwrap();
 
@@ -410,7 +417,7 @@ banana 1.0.0 ddd444
         allowlist.insert("mango");
 
         let mut output = Vec::new();
-        filter_versions_streaming(input.as_bytes(), &mut output, FilterMode::Allow(&allowlist), true).unwrap();
+        filter_versions_streaming(input.as_bytes(), &mut output, FilterMode::Allow(&allowlist), VersionOutput::Strip).unwrap();
 
         let result = String::from_utf8(output).unwrap();
 

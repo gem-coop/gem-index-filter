@@ -17,7 +17,7 @@
 //! **Allow mode** - include only specific gems:
 //!
 //! ```no_run
-//! use gem_index_filter::{filter_versions_streaming, FilterMode};
+//! use gem_index_filter::{filter_versions_streaming, FilterMode, VersionOutput};
 //! use std::collections::HashSet;
 //! use std::fs::File;
 //!
@@ -26,32 +26,32 @@
 //! let mut allowlist = HashSet::new();
 //! allowlist.insert("rails");
 //! allowlist.insert("sinatra");
-//! filter_versions_streaming(input, &mut output, FilterMode::Allow(&allowlist), false).unwrap();
+//! filter_versions_streaming(input, &mut output, FilterMode::Allow(&allowlist), VersionOutput::Preserve).unwrap();
 //! ```
 //!
 //! **Block mode** - exclude specific gems:
 //!
 //! ```no_run
-//! # use gem_index_filter::{filter_versions_streaming, FilterMode};
+//! # use gem_index_filter::{filter_versions_streaming, FilterMode, VersionOutput};
 //! # use std::collections::HashSet;
 //! # use std::fs::File;
 //! let input = File::open("versions").unwrap();
 //! let mut output = File::create("versions.filtered").unwrap();
 //! let mut blocklist = HashSet::new();
 //! blocklist.insert("big-gem");
-//! filter_versions_streaming(input, &mut output, FilterMode::Block(&blocklist), false).unwrap();
+//! filter_versions_streaming(input, &mut output, FilterMode::Block(&blocklist), VersionOutput::Preserve).unwrap();
 //! ```
 //!
 //! **Passthrough mode** - no filtering:
 //!
 //! ```no_run
-//! # use gem_index_filter::{filter_versions_streaming, FilterMode};
+//! # use gem_index_filter::{filter_versions_streaming, FilterMode, VersionOutput};
 //! # use std::fs::File;
 //! let input = File::open("versions").unwrap();
 //! let mut output = File::create("versions.filtered").unwrap();
-//! filter_versions_streaming(input, &mut output, FilterMode::Passthrough, false).unwrap();
+//! filter_versions_streaming(input, &mut output, FilterMode::Passthrough, VersionOutput::Preserve).unwrap();
 //! ```
 
 pub mod filter;
 
-pub use filter::{filter_versions_streaming, FilterMode};
+pub use filter::{filter_versions_streaming, FilterMode, VersionOutput};

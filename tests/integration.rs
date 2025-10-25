@@ -1,4 +1,4 @@
-use gem_index_filter::{filter_versions_streaming, FilterMode};
+use gem_index_filter::{filter_versions_streaming, FilterMode, VersionOutput};
 use std::collections::HashSet;
 
 /// Test with realistic versions file format including duplicates and yanked versions
@@ -25,7 +25,7 @@ rails 7.0.3,7.0.4 updated999888
     allowlist.insert("active_model_serializers");
 
     let mut output = Vec::new();
-    filter_versions_streaming(input.as_bytes(), &mut output, FilterMode::Allow(&allowlist), false).unwrap();
+    filter_versions_streaming(input.as_bytes(), &mut output, FilterMode::Allow(&allowlist), VersionOutput::Preserve).unwrap();
     let result_str = String::from_utf8(output).unwrap();
 
     // Check metadata is preserved
@@ -75,7 +75,7 @@ banana 1.0.0 ddd444
     allowlist.insert("mango");
 
     let mut output = Vec::new();
-    filter_versions_streaming(input.as_bytes(), &mut output, FilterMode::Allow(&allowlist), false).unwrap();
+    filter_versions_streaming(input.as_bytes(), &mut output, FilterMode::Allow(&allowlist), VersionOutput::Preserve).unwrap();
     let result_str = String::from_utf8(output).unwrap();
 
     // Split into lines and find gem entries
@@ -100,7 +100,7 @@ sinatra 3.0.0 def456
     let allowlist = HashSet::new();
 
     let mut output = Vec::new();
-    filter_versions_streaming(input.as_bytes(), &mut output, FilterMode::Allow(&allowlist), false).unwrap();
+    filter_versions_streaming(input.as_bytes(), &mut output, FilterMode::Allow(&allowlist), VersionOutput::Preserve).unwrap();
     let result_str = String::from_utf8(output).unwrap();
 
     // Should only have metadata
@@ -120,7 +120,7 @@ sinatra 3.0.0 def456
     allowlist.insert("sinatra");
 
     let mut output = Vec::new();
-    filter_versions_streaming(input.as_bytes(), &mut output, FilterMode::Allow(&allowlist), false).unwrap();
+    filter_versions_streaming(input.as_bytes(), &mut output, FilterMode::Allow(&allowlist), VersionOutput::Preserve).unwrap();
     let result_str = String::from_utf8(output).unwrap();
 
     assert!(result_str.contains("rails 7.0.0 abc123"));
@@ -138,7 +138,7 @@ rails -7.0.0,7.0.1 abc123
     allowlist.insert("rails");
 
     let mut output = Vec::new();
-    filter_versions_streaming(input.as_bytes(), &mut output, FilterMode::Allow(&allowlist), false).unwrap();
+    filter_versions_streaming(input.as_bytes(), &mut output, FilterMode::Allow(&allowlist), VersionOutput::Preserve).unwrap();
     let result_str = String::from_utf8(output).unwrap();
 
     // Yanked version marker should be preserved
@@ -160,7 +160,7 @@ rails 3.0.0 eee555
     allowlist.insert("rails");
 
     let mut output = Vec::new();
-    filter_versions_streaming(input.as_bytes(), &mut output, FilterMode::Allow(&allowlist), false).unwrap();
+    filter_versions_streaming(input.as_bytes(), &mut output, FilterMode::Allow(&allowlist), VersionOutput::Preserve).unwrap();
     let result_str = String::from_utf8(output).unwrap();
 
     let lines: Vec<&str> = result_str.lines().skip(2).collect();
@@ -187,7 +187,7 @@ rails 7.0.3,7.0.4 updated999888
     allowlist.insert("sinatra");
 
     let mut output = Vec::new();
-    filter_versions_streaming(input.as_bytes(), &mut output, FilterMode::Allow(&allowlist), true).unwrap();
+    filter_versions_streaming(input.as_bytes(), &mut output, FilterMode::Allow(&allowlist), VersionOutput::Strip).unwrap();
     let result_str = String::from_utf8(output).unwrap();
 
     // Check metadata is preserved
@@ -227,7 +227,7 @@ rails 7.0.0,7.0.1 abc123
     allowlist.insert("active_model_serializers");
 
     let mut output = Vec::new();
-    filter_versions_streaming(input.as_bytes(), &mut output, FilterMode::Allow(&allowlist), true).unwrap();
+    filter_versions_streaming(input.as_bytes(), &mut output, FilterMode::Allow(&allowlist), VersionOutput::Strip).unwrap();
     let result_str = String::from_utf8(output).unwrap();
 
     // Stripped versions should replace yanked versions too
@@ -256,7 +256,7 @@ rails 7.0.3,7.0.4 updated999888
     blocklist.insert("puma");
 
     let mut output = Vec::new();
-    filter_versions_streaming(input.as_bytes(), &mut output, FilterMode::Block(&blocklist), false).unwrap();
+    filter_versions_streaming(input.as_bytes(), &mut output, FilterMode::Block(&blocklist), VersionOutput::Preserve).unwrap();
     let result_str = String::from_utf8(output).unwrap();
 
     // Check metadata is preserved
@@ -297,7 +297,7 @@ rack 2.0.0 aaa111
     effective_allowlist.retain(|gem| !blocklist.contains(&gem.as_ref()));
 
     let mut output = Vec::new();
-    filter_versions_streaming(input.as_bytes(), &mut output, FilterMode::Allow(&effective_allowlist), false).unwrap();
+    filter_versions_streaming(input.as_bytes(), &mut output, FilterMode::Allow(&effective_allowlist), VersionOutput::Preserve).unwrap();
     let result_str = String::from_utf8(output).unwrap();
 
     // Should contain only rails and sinatra (allowlisted but not blocked)
