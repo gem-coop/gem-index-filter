@@ -1,5 +1,5 @@
 use gem_index_filter::filter::filter_versions_streaming;
-use gem_index_filter::{FilterMode, VersionOutput};
+use gem_index_filter::{DigestAlgorithm, FilterMode, VersionOutput};
 use std::collections::HashSet;
 use std::env;
 use std::fs::File;
@@ -15,9 +15,10 @@ fn main() -> io::Result<()> {
         VersionOutput::Preserve
     };
 
-    // Find --allow and --block flags and extract their values
+    // Find --allow, --block, and --digest flags and extract their values
     let mut allowlist_file: Option<&str> = None;
     let mut blocklist_file: Option<&str> = None;
+    let mut digest_algorithm: Option<DigestAlgorithm> = None;
     let mut i = 1; // Start after program name
     while i < args.len() {
         if args[i] == "--allow" {
@@ -36,20 +37,43 @@ fn main() -> io::Result<()> {
                 eprintln!("Error: --block requires a file path");
                 std::process::exit(1);
             }
+        } else if args[i] == "--digest" {
+            if i + 1 < args.len() {
+                let algo_str = args[i + 1].to_lowercase();
+                digest_algorithm = match algo_str.as_str() {
+                    "sha256" | "sha-256" => Some(DigestAlgorithm::Sha256),
+                    "sha512" | "sha-512" => Some(DigestAlgorithm::Sha512),
+                    _ => {
+                        eprintln!("Error: Unknown digest algorithm '{}'. Supported: sha256, sha512", args[i + 1]);
+                        std::process::exit(1);
+                    }
+                };
+                i += 2;
+            } else {
+                eprintln!("Error: --digest requires an algorithm (sha256, sha512)");
+                std::process::exit(1);
+            }
         } else {
             i += 1;
         }
     }
 
     // Get positional arguments (excluding program name and flags)
+    let digest_arg = digest_algorithm.as_ref().map(|_| {
+        args.iter().position(|a| a == "--digest")
+            .and_then(|i| args.get(i + 1))
+    }).flatten();
+
     let positional_args: Vec<&String> = args.iter()
         .skip(1)
         .filter(|arg| {
             *arg != "--strip-versions" &&
             *arg != "--allow" &&
             *arg != "--block" &&
+            *arg != "--digest" &&
             !allowlist_file.map_or(false, |f| *arg == f) &&
-            !blocklist_file.map_or(false, |f| *arg == f)
+            !blocklist_file.map_or(false, |f| *arg == f) &&
+            !digest_arg.map_or(false, |d| *arg == d)
         })
         .collect();
 
@@ -61,9 +85,10 @@ fn main() -> io::Result<()> {
         eprintln!("  [output-file]     Optional output file (defaults to stdout)");
         eprintln!();
         eprintln!("Options:");
-        eprintln!("  --allow <file>    Filter to only gems in allowlist file (one name per line)");
-        eprintln!("  --block <file>    Filter out gems in blocklist file (one name per line)");
-        eprintln!("  --strip-versions  Replace version lists with '0' in output");
+        eprintln!("  --allow <file>       Filter to only gems in allowlist file (one name per line)");
+        eprintln!("  --block <file>       Filter out gems in blocklist file (one name per line)");
+        eprintln!("  --strip-versions     Replace version lists with '0' in output");
+        eprintln!("  --digest <algorithm> Compute checksum of filtered output (sha256, sha512)");
         eprintln!();
         eprintln!("Examples:");
         eprintln!("  gem-index-filter versions.txt                                      # Pass through all gems");
@@ -71,6 +96,7 @@ fn main() -> io::Result<()> {
         eprintln!("  gem-index-filter --block blocklist.txt versions.txt filtered.txt   # Block specific gems");
         eprintln!("  gem-index-filter --allow allow.txt --block block.txt versions.txt  # Allow mode with blocked gems removed");
         eprintln!("  gem-index-filter --strip-versions versions.txt filtered.txt        # Strip versions");
+        eprintln!("  gem-index-filter --digest sha256 versions.txt filtered.txt         # Compute SHA-256 checksum");
         eprintln!("  curl https://rubygems.org/versions | facet --allow allowlist.txt - > filtered.txt");
         std::process::exit(1);
     }
@@ -132,11 +158,27 @@ fn main() -> io::Result<()> {
     // Stream and filter
     if let Some(output_path) = output_file {
         let mut output = File::create(output_path)?;
-        filter_versions_streaming(input, &mut output, mode, version_output)?;
+let digest = filter_versions_streaming(input, &mut output, mode, version_output, digest_algorithm)?;
         eprintln!("Written to {}", output_path);
+        if let Some(checksum) = digest {
+            let algo_name = match digest_algorithm {
+                Some(DigestAlgorithm::Sha256) => "SHA-256",
+                Some(DigestAlgorithm::Sha512) => "SHA-512",
+                None => unreachable!(),
+            };
+            eprintln!("{}: {}", algo_name, checksum);
+        }
     } else {
         let mut output = io::stdout();
-        filter_versions_streaming(input, &mut output, mode, version_output)?;
+let digest = filter_versions_streaming(input, &mut output, mode, version_output, digest_algorithm)?;
+        if let Some(checksum) = digest {
+            let algo_name = match digest_algorithm {
+                Some(DigestAlgorithm::Sha256) => "SHA-256",
+                Some(DigestAlgorithm::Sha512) => "SHA-512",
+                None => unreachable!(),
+            };
+            eprintln!("{}: {}", algo_name, checksum);
+        }
     }
 
     Ok(())
