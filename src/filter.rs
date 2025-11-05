@@ -1,6 +1,6 @@
+use sha2::{Digest, Sha256, Sha512};
 use std::collections::HashSet;
 use std::io::{BufRead, BufReader, Read, Write};
-use sha2::{Sha256, Sha512, Digest};
 
 /// Filtering mode for gem selection
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -29,6 +29,16 @@ pub enum DigestAlgorithm {
     Sha256,
     /// SHA-512 checksum
     Sha512,
+}
+
+impl DigestAlgorithm {
+    /// Return the standard name of the digest algorithm
+    pub fn name(&self) -> &'static str {
+        match self {
+            DigestAlgorithm::Sha256 => "SHA-256",
+            DigestAlgorithm::Sha512 => "SHA-512",
+        }
+    }
 }
 
 /// Internal enum for holding active digest state
@@ -78,6 +88,34 @@ impl<'a, W: Write> Write for DigestWriter<'a, W> {
         self.inner.flush()
     }
 }
+/// Execute the complete filtering pipeline: metadata pass-through + gem filtering
+///
+/// This helper function encapsulates the core filtering logic and is used by both
+/// digest and non-digest code paths to eliminate duplication.
+fn execute_filter_pipeline<R: Read, W: Write>(
+    reader: &mut BufReader<R>,
+    output: &mut W,
+    mode: FilterMode,
+    version_output: VersionOutput,
+) -> std::io::Result<()> {
+    // Pass through metadata until separator "---"
+    pass_through_metadata(reader, output)?;
+
+    // Branch to specialized filter function based on mode
+    // This hoists the mode check outside the hot loop for performance
+    match mode {
+        FilterMode::Passthrough => process_passthrough(reader, output, version_output)?,
+        FilterMode::Allow(allowlist) => {
+            process_filtered(reader, output, allowlist, true, version_output)?
+        }
+        FilterMode::Block(blocklist) => {
+            process_filtered(reader, output, blocklist, false, version_output)?
+        }
+    }
+
+    Ok(())
+}
+
 /// Stream and filter versions file by first word (gem name) with zero memory retention
 ///
 /// This function:
@@ -97,43 +135,23 @@ pub fn filter_versions_streaming<R: Read, W: Write>(
     input: R,
     output: &mut W,
     mode: FilterMode,
-version_output: VersionOutput,
+    version_output: VersionOutput,
     digest_algorithm: Option<DigestAlgorithm>,
 ) -> std::io::Result<Option<String>> {
     let mut reader = BufReader::new(input);
 
-// Wrap output in DigestWriter if checksum is requested
+    // Wrap output in DigestWriter if checksum is requested
     match digest_algorithm {
         Some(algorithm) => {
             // Wrap output writer to compute digest as data streams through
             let mut digest_writer = DigestWriter::new(output, algorithm);
-
-            // Pass through metadata until separator "---"
-            pass_through_metadata(&mut reader, &mut digest_writer)?;
-
-            // Branch to specialized filter function based on mode
-            // This hoists the mode check outside the hot loop for performance
-            match mode {
-                FilterMode::Passthrough => process_passthrough(&mut reader, &mut digest_writer, version_output)?,
-                FilterMode::Allow(allowlist) => process_filtered(&mut reader, &mut digest_writer, allowlist, true, version_output)?,
-                FilterMode::Block(blocklist) => process_filtered(&mut reader, &mut digest_writer, blocklist, false, version_output)?,
-            }
-
+            execute_filter_pipeline(&mut reader, &mut digest_writer, mode, version_output)?;
             // Finalize digest and return hex string
             Ok(Some(digest_writer.finalize()))
         }
         None => {
             // No digest requested, use output directly
-            // Pass through metadata until separator "---"
-            pass_through_metadata(&mut reader, output)?;
-
-            // Branch to specialized filter function based on mode
-            match mode {
-                FilterMode::Passthrough => process_passthrough(&mut reader, output, version_output)?,
-                FilterMode::Allow(allowlist) => process_filtered(&mut reader, output, allowlist, true, version_output)?,
-                FilterMode::Block(blocklist) => process_filtered(&mut reader, output, blocklist, false, version_output)?,
-            }
-
+            execute_filter_pipeline(&mut reader, output, mode, version_output)?;
             Ok(None)
         }
     }
@@ -167,10 +185,23 @@ fn pass_through_metadata<R: Read, W: Write>(
 }
 
 /// Process all gems without filtering
+///
+/// Hoists version_output check outside the hot loop for performance
 fn process_passthrough<R: Read, W: Write>(
     reader: &mut BufReader<R>,
     output: &mut W,
     version_output: VersionOutput,
+) -> std::io::Result<()> {
+    match version_output {
+        VersionOutput::Strip => process_passthrough_stripped(reader, output),
+        VersionOutput::Preserve => process_passthrough_preserved(reader, output),
+    }
+}
+
+/// Process all gems without filtering, preserving original format
+fn process_passthrough_preserved<R: Read, W: Write>(
+    reader: &mut BufReader<R>,
+    output: &mut W,
 ) -> std::io::Result<()> {
     let mut line = String::new();
 
@@ -186,16 +217,40 @@ fn process_passthrough<R: Read, W: Write>(
             continue;
         }
 
-        match version_output {
-            VersionOutput::Strip => write_gem_line_stripped(trimmed, output)?,
-            VersionOutput::Preserve => output.write_all(line.as_bytes())?,
+        output.write_all(line.as_bytes())?;
+    }
+
+    Ok(())
+}
+
+/// Process all gems without filtering, stripping version information
+fn process_passthrough_stripped<R: Read, W: Write>(
+    reader: &mut BufReader<R>,
+    output: &mut W,
+) -> std::io::Result<()> {
+    let mut line = String::new();
+
+    loop {
+        line.clear();
+        let n = reader.read_line(&mut line)?;
+        if n == 0 {
+            break; // EOF
         }
+
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        write_gem_line_stripped(trimmed, output)?;
     }
 
     Ok(())
 }
 
 /// Process gems with filtering based on gemlist membership
+///
+/// Hoists version_output check outside the hot loop for performance
 ///
 /// When `include_on_match` is true (Allow mode): includes gems where gemlist.contains(gemname) == true
 /// When `include_on_match` is false (Block mode): includes gems where gemlist.contains(gemname) == false
@@ -205,6 +260,23 @@ fn process_filtered<R: Read, W: Write>(
     gemlist: &HashSet<&str>,
     include_on_match: bool,
     version_output: VersionOutput,
+) -> std::io::Result<()> {
+    match version_output {
+        VersionOutput::Strip => {
+            process_filtered_stripped(reader, output, gemlist, include_on_match)
+        }
+        VersionOutput::Preserve => {
+            process_filtered_preserved(reader, output, gemlist, include_on_match)
+        }
+    }
+}
+
+/// Process gems with filtering, preserving original format
+fn process_filtered_preserved<R: Read, W: Write>(
+    reader: &mut BufReader<R>,
+    output: &mut W,
+    gemlist: &HashSet<&str>,
+    include_on_match: bool,
 ) -> std::io::Result<()> {
     let mut line = String::new();
 
@@ -224,7 +296,40 @@ fn process_filtered<R: Read, W: Write>(
         if let Some(gem_name) = extract_gem_name(trimmed) {
             let is_in_list = gemlist.contains(gem_name);
             if is_in_list == include_on_match {
-                write_gem_line(trimmed, &line, output, version_output)?;
+                output.write_all(line.as_bytes())?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Process gems with filtering, stripping version information
+fn process_filtered_stripped<R: Read, W: Write>(
+    reader: &mut BufReader<R>,
+    output: &mut W,
+    gemlist: &HashSet<&str>,
+    include_on_match: bool,
+) -> std::io::Result<()> {
+    let mut line = String::new();
+
+    loop {
+        line.clear();
+        let n = reader.read_line(&mut line)?;
+        if n == 0 {
+            break; // EOF
+        }
+
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        // Extract first word (gem name) and check gemlist
+        if let Some(gem_name) = extract_gem_name(trimmed) {
+            let is_in_list = gemlist.contains(gem_name);
+            if is_in_list == include_on_match {
+                write_gem_line_stripped(trimmed, output)?;
             }
         }
     }
@@ -238,21 +343,7 @@ fn extract_gem_name(line: &str) -> Option<&str> {
     line.find(' ').map(|space_pos| &line[..space_pos])
 }
 
-/// Write a gem line to output, optionally stripping version information
-#[inline]
-fn write_gem_line<W: Write>(
-    trimmed: &str,
-    original_line: &str,
-    output: &mut W,
-    version_output: VersionOutput,
-) -> std::io::Result<()> {
-    match version_output {
-        VersionOutput::Strip => write_gem_line_stripped(trimmed, output),
-        VersionOutput::Preserve => output.write_all(original_line.as_bytes()),
-    }
-}
-
-/// Helper function to write a gem line with stripped version info
+/// Write a gem line with stripped version info
 #[inline]
 fn write_gem_line_stripped<W: Write>(trimmed: &str, output: &mut W) -> std::io::Result<()> {
     // Parse and reconstruct line: gemname versions md5 [extra...] -> gemname 0 md5 [extra...]
@@ -289,7 +380,14 @@ rails 7.0.1 xyz999
         allowlist.insert("sinatra");
 
         let mut output = Vec::new();
-let digest = filter_versions_streaming(input.as_bytes(), &mut output, FilterMode::Allow(&allowlist), VersionOutput::Preserve, None).unwrap();
+        let digest = filter_versions_streaming(
+            input.as_bytes(),
+            &mut output,
+            FilterMode::Allow(&allowlist),
+            VersionOutput::Preserve,
+            None,
+        )
+        .unwrap();
         assert!(digest.is_none());
 
         let result = String::from_utf8(output).unwrap();
@@ -318,7 +416,14 @@ rails 7.0.0 abc123
         allowlist.insert("rails");
 
         let mut output = Vec::new();
-filter_versions_streaming(input.as_bytes(), &mut output, FilterMode::Allow(&allowlist), VersionOutput::Preserve, None).unwrap();
+        filter_versions_streaming(
+            input.as_bytes(),
+            &mut output,
+            FilterMode::Allow(&allowlist),
+            VersionOutput::Preserve,
+            None,
+        )
+        .unwrap();
 
         let result = String::from_utf8(output).unwrap();
         assert_eq!(result, input); // Should be identical for all-included case
@@ -335,7 +440,14 @@ sinatra 3.0.0 ghi789
         let allowlist = HashSet::new();
 
         let mut output = Vec::new();
-filter_versions_streaming(input.as_bytes(), &mut output, FilterMode::Allow(&allowlist), VersionOutput::Preserve, None).unwrap();
+        filter_versions_streaming(
+            input.as_bytes(),
+            &mut output,
+            FilterMode::Allow(&allowlist),
+            VersionOutput::Preserve,
+            None,
+        )
+        .unwrap();
 
         let result = String::from_utf8(output).unwrap();
 
@@ -356,7 +468,14 @@ sinatra 3.0.0 ghi789
 "#;
 
         let mut output = Vec::new();
-filter_versions_streaming(input.as_bytes(), &mut output, FilterMode::Passthrough, VersionOutput::Preserve, None).unwrap();
+        filter_versions_streaming(
+            input.as_bytes(),
+            &mut output,
+            FilterMode::Passthrough,
+            VersionOutput::Preserve,
+            None,
+        )
+        .unwrap();
 
         let result = String::from_utf8(output).unwrap();
 
@@ -385,7 +504,14 @@ puma 5.0.0 xyz999
         blocklist.insert("puma");
 
         let mut output = Vec::new();
-filter_versions_streaming(input.as_bytes(), &mut output, FilterMode::Block(&blocklist), VersionOutput::Preserve, None).unwrap();
+        filter_versions_streaming(
+            input.as_bytes(),
+            &mut output,
+            FilterMode::Block(&blocklist),
+            VersionOutput::Preserve,
+            None,
+        )
+        .unwrap();
 
         let result = String::from_utf8(output).unwrap();
 
@@ -415,7 +541,14 @@ sinatra 3.0.0 ghi789
         blocklist.insert("activerecord");
 
         let mut output = Vec::new();
-filter_versions_streaming(input.as_bytes(), &mut output, FilterMode::Block(&blocklist), VersionOutput::Strip, None).unwrap();
+        filter_versions_streaming(
+            input.as_bytes(),
+            &mut output,
+            FilterMode::Block(&blocklist),
+            VersionOutput::Strip,
+            None,
+        )
+        .unwrap();
 
         let result = String::from_utf8(output).unwrap();
 
@@ -441,7 +574,14 @@ puma 5.0.0 ghi789 extra_field
         allowlist.insert("puma");
 
         let mut output = Vec::new();
-filter_versions_streaming(input.as_bytes(), &mut output, FilterMode::Allow(&allowlist), VersionOutput::Strip, None).unwrap();
+        filter_versions_streaming(
+            input.as_bytes(),
+            &mut output,
+            FilterMode::Allow(&allowlist),
+            VersionOutput::Strip,
+            None,
+        )
+        .unwrap();
 
         let result = String::from_utf8(output).unwrap();
 
@@ -468,7 +608,14 @@ rails 7.0.3,7.0.4 updated999888
         allowlist.insert("sinatra");
 
         let mut output = Vec::new();
-filter_versions_streaming(input.as_bytes(), &mut output, FilterMode::Allow(&allowlist), VersionOutput::Strip, None).unwrap();
+        filter_versions_streaming(
+            input.as_bytes(),
+            &mut output,
+            FilterMode::Allow(&allowlist),
+            VersionOutput::Strip,
+            None,
+        )
+        .unwrap();
 
         let result = String::from_utf8(output).unwrap();
 
@@ -506,7 +653,14 @@ banana 1.0.0 ddd444
         allowlist.insert("mango");
 
         let mut output = Vec::new();
-filter_versions_streaming(input.as_bytes(), &mut output, FilterMode::Allow(&allowlist), VersionOutput::Strip, None).unwrap();
+        filter_versions_streaming(
+            input.as_bytes(),
+            &mut output,
+            FilterMode::Allow(&allowlist),
+            VersionOutput::Strip,
+            None,
+        )
+        .unwrap();
 
         let result = String::from_utf8(output).unwrap();
 
@@ -537,8 +691,9 @@ sinatra 3.0.0 ghi789
             &mut output,
             FilterMode::Allow(&allowlist),
             VersionOutput::Preserve,
-            Some(DigestAlgorithm::Sha256)
-        ).unwrap();
+            Some(DigestAlgorithm::Sha256),
+        )
+        .unwrap();
 
         // Should return a digest
         assert!(digest.is_some());
@@ -556,7 +711,6 @@ sinatra 3.0.0 ghi789
         assert!(!result.contains("sinatra"));
     }
 
-
     #[test]
     fn test_digest_sha512() {
         let input = r#"created_at: 2024-04-01T00:00:05Z
@@ -570,8 +724,9 @@ rails 7.0.0 abc123
             &mut output,
             FilterMode::Passthrough,
             VersionOutput::Preserve,
-            Some(DigestAlgorithm::Sha512)
-        ).unwrap();
+            Some(DigestAlgorithm::Sha512),
+        )
+        .unwrap();
 
         // Should return a digest
         assert!(digest.is_some());
@@ -601,8 +756,9 @@ sinatra 3.0.0 def456
             &mut output,
             FilterMode::Allow(&allowlist),
             VersionOutput::Strip,
-            Some(DigestAlgorithm::Sha256)
-        ).unwrap();
+            Some(DigestAlgorithm::Sha256),
+        )
+        .unwrap();
 
         assert!(digest.is_some());
         let result = String::from_utf8(output).unwrap();
@@ -617,8 +773,9 @@ sinatra 3.0.0 def456
             &mut output2,
             FilterMode::Allow(&allowlist),
             VersionOutput::Preserve,
-            Some(DigestAlgorithm::Sha256)
-        ).unwrap();
+            Some(DigestAlgorithm::Sha256),
+        )
+        .unwrap();
 
         assert_ne!(digest.unwrap(), digest2.unwrap());
     }
@@ -637,8 +794,9 @@ rails 7.0.0 abc123
             &mut output1,
             FilterMode::Passthrough,
             VersionOutput::Preserve,
-            Some(DigestAlgorithm::Sha256)
-        ).unwrap();
+            Some(DigestAlgorithm::Sha256),
+        )
+        .unwrap();
 
         let mut output2 = Vec::new();
         let digest2 = filter_versions_streaming(
@@ -646,8 +804,9 @@ rails 7.0.0 abc123
             &mut output2,
             FilterMode::Passthrough,
             VersionOutput::Preserve,
-            Some(DigestAlgorithm::Sha256)
-        ).unwrap();
+            Some(DigestAlgorithm::Sha256),
+        )
+        .unwrap();
 
         assert_eq!(digest1, digest2);
         assert_eq!(output1, output2);

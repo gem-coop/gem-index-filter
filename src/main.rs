@@ -161,23 +161,13 @@ fn main() -> io::Result<()> {
 let digest = filter_versions_streaming(input, &mut output, mode, version_output, digest_algorithm)?;
         eprintln!("Written to {}", output_path);
         if let Some(checksum) = digest {
-            let algo_name = match digest_algorithm {
-                Some(DigestAlgorithm::Sha256) => "SHA-256",
-                Some(DigestAlgorithm::Sha512) => "SHA-512",
-                None => unreachable!(),
-            };
-            eprintln!("{}: {}", algo_name, checksum);
+            eprintln!("{}: {}", digest_algorithm.unwrap().name(), checksum);
         }
     } else {
         let mut output = io::stdout();
 let digest = filter_versions_streaming(input, &mut output, mode, version_output, digest_algorithm)?;
         if let Some(checksum) = digest {
-            let algo_name = match digest_algorithm {
-                Some(DigestAlgorithm::Sha256) => "SHA-256",
-                Some(DigestAlgorithm::Sha512) => "SHA-512",
-                None => unreachable!(),
-            };
-            eprintln!("{}: {}", algo_name, checksum);
+            eprintln!("{}: {}", digest_algorithm.unwrap().name(), checksum);
         }
     }
 
