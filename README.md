@@ -12,6 +12,58 @@ Fast filtering for RubyGems `versions` index files. Designed for memory-constrai
 
 ## Usage
 
+### HTTP Server
+
+The server binary provides a webhook-based filtering service with two endpoints:
+
+**Starting the server:**
+
+```bash
+# Build with server feature
+cargo build --release --features server
+
+# Configure via environment variables
+export CACHE_PATH="/tmp/versions.filtered"
+export ALLOWLIST_PATH="allowlist.txt"
+export BLOCKLIST_PATH="blocklist.txt"  # optional
+export PORT=3000  # optional, defaults to 3000
+
+# Run the server
+./target/release/gem-index-filter-server
+```
+
+**Endpoints:**
+
+- `POST /webhook` - Fetches from https://rubygems.org/versions, applies filtering with version stripping, and caches the result
+- `GET /versions` - Returns the cached filtered versions file
+
+**Example usage:**
+
+```bash
+# Trigger regeneration of filtered versions file
+curl -X POST http://localhost:3000/webhook
+
+# Fetch the cached filtered versions
+curl http://localhost:3000/versions
+```
+
+**Use case:** Deploy as a service that maintains an up-to-date filtered versions index. Trigger `/webhook` on a schedule (e.g., hourly cron job) or via external webhook, and serve the cached result to clients requesting `/versions`.
+
+**Configuration:**
+
+- `CACHE_PATH`: Where to store the filtered versions file (default: `/tmp/versions.filtered`)
+- `ALLOWLIST_PATH`: Path to allowlist file (optional)
+- `BLOCKLIST_PATH`: Path to blocklist file (optional)
+- `PORT`: Server port (default: `3000`)
+
+The server applies the same filtering logic as the CLI tool, automatically using:
+- Passthrough mode if no filter lists provided
+- Allow mode if only allowlist provided
+- Block mode if only blocklist provided
+- Combined mode (allowlist - blocklist) if both provided
+
+**Note:** The server always strips versions (replaces with `0`) to reduce cache size.
+
 ### Command Line
 
 ```bash
@@ -153,8 +205,11 @@ impl FilteredIndex {
 # Run tests
 cargo test
 
-# Build release binary
+# Build CLI binary
 cargo build --release
+
+# Build server binary
+cargo build --release --features server
 
 # For Fastly Compute (wasm32-wasi target)
 cargo build --target wasm32-wasi --release
