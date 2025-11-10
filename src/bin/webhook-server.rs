@@ -1,5 +1,6 @@
 use axum::{http::StatusCode, response::IntoResponse, routing::post, Router};
 use aws_sdk_s3::Client as S3Client;
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use gem_index_filter::{filter_versions_streaming, DigestAlgorithm, FilterMode, VersionOutput};
 use serde::Serialize;
 use std::collections::HashSet;
@@ -103,7 +104,11 @@ async fn process_index(
         checksum
     );
 
-    // Upload filtered data with timestamp
+    // Convert hex checksum to base64 for S3
+    let checksum_bytes = hex::decode(&checksum)?;
+    let checksum_base64 = BASE64.encode(&checksum_bytes);
+
+    // Upload filtered data with timestamp and embedded SHA-256 checksum
     let timestamp = chrono::Utc::now().format("%Y%m%d-%H%M%S");
     let data_key = format!("versions/filtered-{}.bin", timestamp);
 
@@ -113,25 +118,13 @@ async fn process_index(
         .key(&data_key)
         .body(filtered_data.into())
         .content_type("application/octet-stream")
+        .checksum_sha256(&checksum_base64)
         .send()
         .await?;
 
-    // Upload checksum as metadata file
-    let checksum_key = format!("versions/filtered-{}.sha256", timestamp);
-    s3_client
-        .put_object()
-        .bucket(&bucket_name)
-        .key(&checksum_key)
-        .body(checksum.into_bytes().into())
-        .content_type("text/plain")
-        .send()
-        .await?;
-
-    // Update "latest" pointers
+    // Update "latest" pointer (preserves checksum metadata)
     let latest_data_key = "versions/filtered-latest.bin";
-    let latest_checksum_key = "versions/filtered-latest.sha256";
 
-    // Copy the timestamped versions to the latest pointers
     s3_client
         .copy_object()
         .bucket(&bucket_name)
@@ -140,17 +133,9 @@ async fn process_index(
         .send()
         .await?;
 
-    s3_client
-        .copy_object()
-        .bucket(&bucket_name)
-        .copy_source(format!("{}/{}", bucket_name, checksum_key))
-        .key(latest_checksum_key)
-        .send()
-        .await?;
-
     println!(
-        "Uploaded: {} and {} (also updated latest pointers)",
-        data_key, checksum_key
+        "Uploaded: {} with SHA-256: {} (also updated latest pointer)",
+        data_key, checksum
     );
     Ok(())
 }

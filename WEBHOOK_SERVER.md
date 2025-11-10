@@ -72,12 +72,10 @@ HTTP 202 Accepted - Processing happens in background.
 3. **Download index**: Fetches https://index.rubygems.org/versions
 4. **Filter**: Uses gem-index-filter to filter with allowlist, strips versions
 5. **Compute checksum**: Calculates SHA-256 of filtered output
-6. **Upload timestamped files**:
-   - `versions/filtered-YYYYMMDD-HHMMSS.bin`
-   - `versions/filtered-YYYYMMDD-HHMMSS.sha256`
-7. **Update latest pointers**:
-   - `versions/filtered-latest.bin` → latest timestamped version
-   - `versions/filtered-latest.sha256` → latest checksum
+6. **Upload timestamped file**:
+   - `versions/filtered-YYYYMMDD-HHMMSS.bin` with embedded SHA-256 checksum
+7. **Update latest pointer**:
+   - `versions/filtered-latest.bin` → copy of latest timestamped version (preserves checksum)
 
 ## Allowlist Format
 
@@ -102,12 +100,35 @@ After processing, your S3 bucket will contain:
 s3://my-rubygems-bucket/
   allowlist.txt
   versions/
-    filtered-20241110-143052.bin
-    filtered-20241110-143052.sha256
-    filtered-20241110-154521.bin
-    filtered-20241110-154521.sha256
-    filtered-latest.bin          -> copy of most recent
-    filtered-latest.sha256       -> copy of most recent checksum
+    filtered-20241110-143052.bin  (with SHA-256 checksum metadata)
+    filtered-20241110-154521.bin  (with SHA-256 checksum metadata)
+    filtered-latest.bin           (copy of most recent, preserves checksum)
+```
+
+Each `.bin` file has its SHA-256 checksum stored as S3 object metadata (using S3's `checksum-sha256` field), eliminating the need for separate `.sha256` files.
+
+### Retrieving Checksums
+
+To retrieve the checksum for verification, use the AWS CLI:
+
+```bash
+# Get checksum from object metadata
+aws s3api head-object \
+  --bucket my-rubygems-bucket \
+  --key versions/filtered-latest.bin \
+  --checksum-mode ENABLED \
+  | jq -r '.ChecksumSHA256'
+```
+
+Or download with automatic verification:
+
+```bash
+# S3 will automatically verify the checksum during download
+aws s3api get-object \
+  --bucket my-rubygems-bucket \
+  --key versions/filtered-latest.bin \
+  --checksum-mode ENABLED \
+  filtered.bin
 ```
 
 ## Performance
@@ -157,7 +178,7 @@ Loaded 10000 gems in allowlist
 Fetching RubyGems index from https://index.rubygems.org/versions
 Downloaded 21428463 bytes, filtering...
 Filtered to 823451 bytes, SHA-256: abc123...
-Uploaded: versions/filtered-20241110-143052.bin and versions/filtered-20241110-143052.sha256 (also updated latest pointers)
+Uploaded: versions/filtered-20241110-143052.bin with SHA-256: abc123... (also updated latest pointer)
 ```
 
 ## Error Handling
